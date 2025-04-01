@@ -19,9 +19,9 @@ const searchQueryValidation = [
         .escape(),
     query("type") // Optional filter (e.g., users, tweets)
         .optional()
-        .isIn(["users", "tweets", "hashtags"])
+        .isIn(["users", "tweets", "hashtags", "all"])
         .withMessage(
-            "Invalid search type. Must be 'users', 'tweets', or 'hashtags'."
+            "Invalid search type. Must be 'users', 'tweets', 'hashtags', or 'all'."
         ),
     // Add validation for pagination parameters if used (e.g., page, limit)
     query("page")
