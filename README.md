@@ -15,7 +15,7 @@ A RESTful API for the Twitter Clone application built with Node.js, Express, Mon
 -   **Node.js** and **Express** for the server
 -   **MongoDB** with Mongoose for database
 -   **JWT** for authentication
--   **Zod** for validation
+-   **express-validator** for input validation
 -   **Jest** for testing
 
 ## Getting Started
@@ -23,7 +23,7 @@ A RESTful API for the Twitter Clone application built with Node.js, Express, Mon
 ### Prerequisites
 
 -   Node.js 18+
--   MongoDB
+-   MongoDB Connection String
 
 ### Installation
 
@@ -40,11 +40,11 @@ A RESTful API for the Twitter Clone application built with Node.js, Express, Mon
     ```
     cp .env.example .env
     ```
-5. Fill in the required environment variables in the `.env` file
+5. Fill in the required environment variables in the `.env` file. Ensure you provide a valid `MONGODB_URI` and strong, unique secrets for `JWT_SECRET` and `JWT_REFRESH_SECRET`. The `.env.example` file documents all required variables, including those for file uploads (`UPLOAD_DIR`, `MAX_FILE_SIZE`).
 
 ### Running the Server
 
-Development mode:
+Development mode (with hot-reloading):
 
 ```
 npm run dev
@@ -56,263 +56,83 @@ Production mode:
 npm start
 ```
 
-## API Documentation
-
-### Authentication
-
-#### Register a new user
-
-```
-POST /api/auth/register
-```
-
-Request body:
-
-```json
-{
-    "username": "johndoe",
-    "email": "john@example.com",
-    "password": "password123",
-    "name": "John Doe"
-}
-```
-
-#### Login
-
-```
-POST /api/auth/login
-```
-
-Request body:
-
-```json
-{
-    "usernameOrEmail": "johndoe",
-    "password": "password123"
-}
-```
-
-#### Refresh token
-
-```
-POST /api/auth/refresh
-```
-
-Request body:
-
-```json
-{
-    "refreshToken": "your-refresh-token"
-}
-```
-
-#### Get current user
-
-```
-GET /api/auth/me
-```
-
-Headers:
-
-```
-Authorization: Bearer your-access-token
-```
-
-### Users
-
-#### Get user profile
-
-```
-GET /api/users/:username
-```
-
-#### Update user profile
-
-```
-PATCH /api/users/profile
-```
-
-Headers:
-
-```
-Authorization: Bearer your-access-token
-```
-
-Request body:
-
-```json
-{
-    "name": "New Name",
-    "bio": "New bio",
-    "location": "New location",
-    "website": "https://example.com"
-}
-```
-
-#### Follow a user
-
-```
-POST /api/users/:username/follow
-```
-
-Headers:
-
-```
-Authorization: Bearer your-access-token
-```
-
-#### Unfollow a user
-
-```
-DELETE /api/users/:username/follow
-```
-
-Headers:
-
-```
-Authorization: Bearer your-access-token
-```
-
-#### Get user followers
-
-```
-GET /api/users/:username/followers
-```
-
-#### Get user following
-
-```
-GET /api/users/:username/following
-```
-
-### Tweets
-
-#### Create a tweet
-
-```
-POST /api/tweets
-```
-
-Headers:
-
-```
-Authorization: Bearer your-access-token
-```
-
-Request body:
-
-```json
-{
-    "content": "Hello world!",
-    "media": [
-        {
-            "type": "image",
-            "url": "https://example.com/image.jpg",
-            "altText": "Example image"
-        }
-    ],
-    "quotedTweetId": "optional-tweet-id",
-    "inReplyToId": "optional-tweet-id"
-}
-```
-
-#### Get a tweet
-
-```
-GET /api/tweets/:id
-```
-
-#### Delete a tweet
-
-```
-DELETE /api/tweets/:id
-```
-
-Headers:
-
-```
-Authorization: Bearer your-access-token
-```
-
-#### Like a tweet
-
-```
-POST /api/tweets/:id/like
-```
-
-Headers:
-
-```
-Authorization: Bearer your-access-token
-```
-
-#### Unlike a tweet
-
-```
-DELETE /api/tweets/:id/like
-```
-
-Headers:
-
-```
-Authorization: Bearer your-access-token
-```
-
-#### Retweet a tweet
-
-```
-POST /api/tweets/:id/retweet
-```
-
-Headers:
-
-```
-Authorization: Bearer your-access-token
-```
-
-#### Undo retweet
-
-```
-DELETE /api/tweets/:id/retweet
-```
-
-Headers:
-
-```
-Authorization: Bearer your-access-token
-```
-
-#### Get user timeline
-
-```
-GET /api/tweets/timeline?page=1&limit=10
-```
-
-Headers:
-
-```
-Authorization: Bearer your-access-token
-```
-
-#### Get user tweets
-
-```
-GET /api/tweets/user/:username?page=1&limit=10
-```
-
-#### Get user replies
-
-```
-GET /api/tweets/user/:username/replies?page=1&limit=10
-```
-
-## Testing
-
-Run tests:
+### Running Tests
 
 ```
 npm test
 ```
+
+## API Documentation
+
+_Note: For detailed request/response examples, refer to API testing tools or frontend implementation._
+
+### General Notes
+
+-   **Authentication**: Protected routes require a `Bearer` token in the `Authorization` header.
+-   **Error Handling**:
+    -   Standard errors return a JSON object: `{ "status": "error", "message": "Error description" }`.
+    -   Validation errors (status `422`) include an additional `errors` array: `{ "status": "error", "message": "Validation failed", "errors": [ { "field": "fieldName", "message": "Specific validation error" }, ... ] }`.
+    -   Authentication/Authorization errors typically return `401` or `403`.
+    -   Server errors return `500`.
+
+### Authentication Endpoints
+
+-   `POST /api/auth/register`: Register a new user.
+-   `POST /api/auth/login`: Login user.
+-   `POST /api/auth/refresh`: Refresh access token using a refresh token.
+-   `GET /api/auth/me`: Get current authenticated user's details.
+-   `POST /api/auth/logout`: (Informational - Logout is client-side token removal).
+
+### User Endpoints
+
+-   `GET /api/users/bookmarks`: Get current user's bookmarked tweets.
+-   `PATCH /api/users/profile`: Update current user's profile.
+-   `GET /api/users/:username`: Get user profile by username.
+-   `POST /api/users/:username/follow`: Follow a user.
+-   `DELETE /api/users/:username/follow`: Unfollow a user.
+-   `GET /api/users/:username/followers`: Get user's followers.
+-   `GET /api/users/:username/following`: Get users the specified user is following.
+
+### Tweet Endpoints
+
+-   `POST /api/tweets`: Create a new tweet (can include `inReplyTo` or `quotedTweet` IDs).
+-   `GET /api/tweets/timeline`: Get the authenticated user's timeline.
+-   `GET /api/tweets/user/:username`: Get tweets by a specific user.
+-   `GET /api/tweets/user/:username/replies`: Get replies by a specific user.
+-   `GET /api/tweets/user/:username/likes`: Get tweets liked by a specific user.
+-   `GET /api/tweets/:id`: Get a specific tweet by ID.
+-   `GET /api/tweets/:id/thread`: Get a tweet and its replies/thread.
+-   `DELETE /api/tweets/:id`: Delete a tweet (author only).
+-   `POST /api/tweets/:id/like`: Like a tweet.
+-   `DELETE /api/tweets/:id/like`: Unlike a tweet.
+-   `POST /api/tweets/:id/retweet`: Retweet a tweet.
+-   `DELETE /api/tweets/:id/retweet`: Undo a retweet.
+-   `POST /api/tweets/:id/bookmark`: Bookmark a tweet.
+-   `DELETE /api/tweets/:id/bookmark`: Remove a bookmark.
+
+### Search Endpoints
+
+-   `GET /api/search?q={query}&type={type}&page={page}&limit={limit}`: Search for users, tweets, or hashtags.
+    -   `q`: Search query (required).
+    -   `type`: Optional filter (`users`, `tweets`, `hashtags`).
+    -   `page`, `limit`: Optional pagination.
+
+### Trends Endpoints
+
+-   `GET /api/trends`: Get trending topics/hashtags.
+-   `GET /api/trends/suggestions`: Get "who to follow" suggestions.
+
+### Upload Endpoints
+
+-   `POST /api/upload/avatar`: Upload user avatar image.
+-   `POST /api/upload/header`: Upload user header image.
+-   `POST /api/upload/tweet`: Upload media for a tweet (images/GIFs).
+
+## Deployment
+
+This application uses a `Procfile` (`web: npm start`) for deployment on platforms like Heroku.
+
+Ensure all necessary environment variables (especially secrets and `NODE_ENV=production`) are set in your deployment environment.
 
 ## License
 
