@@ -1,5 +1,6 @@
 const User = require("../models/user.model");
 const Tweet = require("../models/tweet.model");
+const { getIoInstance } = require("../socketHandler");
 
 /**
  * Get user profile by username
@@ -90,54 +91,77 @@ const updateUserProfile = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-const followUser = async (req, res) => {
+const followUser = async (req, res, next) => {
     try {
         const { username } = req.params;
+        const currentUser = req.user; // Authenticated user
+        const userIdToFollow = (await User.findOne({ username }).select("_id"))
+            ?._id;
 
-        // Find target user
-        const targetUser = await User.findOne({ username });
-        if (!targetUser) {
-            return res.status(404).json({
-                status: "error",
-                message: "User not found",
-            });
+        if (!userIdToFollow) {
+            const err = new Error("User to follow not found");
+            err.statusCode = 404;
+            throw err;
         }
 
-        // Check if user is trying to follow themselves
-        if (targetUser._id.toString() === req.user._id.toString()) {
-            return res.status(400).json({
-                status: "error",
-                message: "You cannot follow yourself",
-            });
+        if (userIdToFollow.toString() === currentUser._id.toString()) {
+            const err = new Error("You cannot follow yourself");
+            err.statusCode = 400;
+            throw err;
         }
 
-        // Check if already following
-        if (req.user.following.includes(targetUser._id)) {
-            return res.status(400).json({
-                status: "error",
-                message: "You are already following this user",
-            });
+        if (currentUser.following.includes(userIdToFollow)) {
+            const err = new Error("You are already following this user");
+            err.statusCode = 400;
+            throw err;
         }
 
-        // Update current user's following
-        await User.findByIdAndUpdate(req.user._id, {
-            $push: { following: targetUser._id },
-        });
+        // Update both users simultaneously
+        await Promise.all([
+            User.findByIdAndUpdate(currentUser._id, {
+                $addToSet: { following: userIdToFollow },
+            }),
+            User.findByIdAndUpdate(userIdToFollow, {
+                $addToSet: { followers: currentUser._id },
+            }),
+        ]);
 
-        // Update target user's followers
-        await User.findByIdAndUpdate(targetUser._id, {
-            $push: { followers: req.user._id },
-        });
+        // --- Emit Socket.IO Event ---
+        try {
+            const io = getIoInstance();
+            const emitterUserId = currentUser._id.toString();
+            const targetUserId = userIdToFollow.toString();
+
+            // Emit to the user who performed the action
+            io.to(emitterUserId).emit("user:follow", {
+                followedUserId: targetUserId,
+                followerUserId: emitterUserId,
+            });
+            console.log(
+                `Socket event user:follow emitted to room ${emitterUserId} for target ${targetUserId}`
+            );
+
+            // Optional: Emit to the user who was followed (for notifications etc.)
+            // io.to(targetUserId).emit("user:followed_by", {
+            //     followerUserId: emitterUserId,
+            // });
+            // console.log(`Socket event user:followed_by emitted to room ${targetUserId} from ${emitterUserId}`);
+        } catch (socketError) {
+            // Log socket error but don't fail the HTTP request
+            console.error(
+                "Socket.IO emission error in followUser:",
+                socketError
+            );
+        }
+        // ---------------------------
 
         res.status(200).json({
             status: "success",
-            message: `You are now following ${targetUser.username}`,
+            message: `You are now following ${username}`,
         });
     } catch (error) {
-        res.status(400).json({
-            status: "error",
-            message: error.message,
-        });
+        // Pass error to the central error handler
+        next(error);
     }
 };
 
@@ -146,46 +170,73 @@ const followUser = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-const unfollowUser = async (req, res) => {
+const unfollowUser = async (req, res, next) => {
     try {
         const { username } = req.params;
+        const currentUser = req.user;
+        // Fetch the user to unfollow and select necessary fields
+        const targetUser = await User.findOne({ username }).select(
+            "_id username name avatar"
+        );
 
-        // Find target user
-        const targetUser = await User.findOne({ username });
         if (!targetUser) {
-            return res.status(404).json({
-                status: "error",
-                message: "User not found",
-            });
+            const err = new Error("User to unfollow not found");
+            err.statusCode = 404;
+            throw err;
         }
 
-        // Check if not following
-        if (!req.user.following.includes(targetUser._id)) {
-            return res.status(400).json({
-                status: "error",
-                message: "You are not following this user",
-            });
+        if (!currentUser.following.includes(targetUser._id)) {
+            const err = new Error("You are not following this user");
+            err.statusCode = 400;
+            throw err;
         }
 
-        // Update current user's following
-        await User.findByIdAndUpdate(req.user._id, {
-            $pull: { following: targetUser._id },
-        });
+        // Update both users simultaneously
+        await Promise.all([
+            User.findByIdAndUpdate(currentUser._id, {
+                $pull: { following: targetUser._id },
+            }),
+            User.findByIdAndUpdate(targetUser._id, {
+                $pull: { followers: currentUser._id },
+            }),
+        ]);
 
-        // Update target user's followers
-        await User.findByIdAndUpdate(targetUser._id, {
-            $pull: { followers: req.user._id },
-        });
+        // --- Emit Socket.IO Event ---
+        try {
+            const io = getIoInstance();
+            const emitterUserId = currentUser._id.toString();
+            const targetUserId = targetUser._id.toString();
+
+            // Emit to the user who performed the action
+            // Include the unfollowed user's data
+            io.to(emitterUserId).emit("user:unfollow", {
+                unfollowedUserId: targetUserId,
+                unfollowerUserId: emitterUserId,
+                unfollowedUserData: {
+                    // Add user data
+                    _id: targetUser._id,
+                    username: targetUser.username,
+                    name: targetUser.name,
+                    avatar: targetUser.avatar,
+                },
+            });
+            console.log(
+                `Socket event user:unfollow emitted to room ${emitterUserId} for target ${targetUserId} with data`
+            );
+        } catch (socketError) {
+            console.error(
+                "Socket.IO emission error in unfollowUser:",
+                socketError
+            );
+        }
+        // ---------------------------
 
         res.status(200).json({
             status: "success",
-            message: `You unfollowed ${targetUser.username}`,
+            message: `You unfollowed ${username}`,
         });
     } catch (error) {
-        res.status(400).json({
-            status: "error",
-            message: error.message,
-        });
+        next(error);
     }
 };
 

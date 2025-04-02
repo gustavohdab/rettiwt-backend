@@ -132,11 +132,13 @@ tweetSchema.virtual("quotes", {
 // Pre-save middleware to extract hashtags and mentions
 tweetSchema.pre("save", function (next) {
     if (this.isModified("content")) {
-        // Extract hashtags
-        const hashtagRegex = /#(\w+)/g;
+        // Extract hashtags using Unicode-aware regex
+        // Allows letters (including Unicode), numbers, and underscore
+        const hashtagRegex = /#([\p{L}\p{N}_]+)/gu;
         this.hashtags = [];
         let match;
         while ((match = hashtagRegex.exec(this.content)) !== null) {
+            // Store the extracted hashtag (group 1) in lowercase
             this.hashtags.push(match[1].toLowerCase());
         }
 

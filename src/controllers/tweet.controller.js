@@ -1,17 +1,19 @@
 const Tweet = require("../models/tweet.model");
 const User = require("../models/user.model");
+const { getIoInstance } = require("../socketHandler"); // Import Socket.IO instance getter
 
 /**
  * Create a new tweet
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
+ * @param {Function} next - Express next function
  */
-const createTweet = async (req, res) => {
+const createTweet = async (req, res, next) => {
     try {
         const { content, media = [], quotedTweetId, inReplyToId } = req.body;
 
         // Create the tweet
-        const tweet = await Tweet.create({
+        const tweet = new Tweet({
             content,
             author: req.user._id,
             media,
@@ -19,33 +21,121 @@ const createTweet = async (req, res) => {
             inReplyTo: inReplyToId || null,
         });
 
-        // Update engagement count if it's a reply or quote
+        await tweet.save();
+
+        // --- Update engagement counts ---
+        const updatePromises = [];
         if (inReplyToId) {
-            await Tweet.findByIdAndUpdate(inReplyToId, {
-                $inc: { "engagementCount.replies": 1 },
-            });
+            updatePromises.push(
+                Tweet.findByIdAndUpdate(inReplyToId, {
+                    $inc: { "engagementCount.replies": 1 },
+                })
+            );
         }
-
         if (quotedTweetId) {
-            await Tweet.findByIdAndUpdate(quotedTweetId, {
-                $inc: { "engagementCount.quotes": 1 },
-            });
+            updatePromises.push(
+                Tweet.findByIdAndUpdate(quotedTweetId, {
+                    $inc: { "engagementCount.quotes": 1 },
+                })
+            );
         }
+        if (updatePromises.length > 0) {
+            await Promise.all(updatePromises);
+        }
+        // -------------------------------
 
-        // Populate author information
-        await tweet.populate("author", "username name avatar");
+        // Populate author information for the response and socket event
+        const populatedTweet = await Tweet.findById(tweet._id)
+            .populate("author", "username name avatar")
+            .lean();
+
+        // --- Calculate and Emit Trending Hashtags ---
+        try {
+            const io = getIoInstance();
+
+            // Get tweets from the last 7 days
+            const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+            // Aggregate to find most used hashtags
+            const trendingHashtags = await Tweet.aggregate([
+                {
+                    $match: {
+                        createdAt: { $gte: oneWeekAgo },
+                        isDeleted: false,
+                        hashtags: { $exists: true, $ne: [] },
+                    },
+                },
+                { $unwind: "$hashtags" },
+                {
+                    $group: {
+                        _id: "$hashtags",
+                        count: { $sum: 1 },
+                        tweets: { $push: "$_id" },
+                        engagementSum: {
+                            $sum: {
+                                $add: [
+                                    "$engagementCount.likes",
+                                    "$engagementCount.retweets",
+                                    "$engagementCount.replies",
+                                ],
+                            },
+                        },
+                    },
+                },
+                {
+                    $project: {
+                        hashtag: "$_id",
+                        count: 1,
+                        tweetCount: { $size: "$tweets" },
+                        engagementScore: "$engagementSum",
+                        _id: 0,
+                    },
+                },
+                {
+                    $sort: {
+                        count: -1,
+                        engagementScore: -1,
+                    },
+                },
+                { $limit: 10 },
+            ]);
+
+            // Emit trending update
+            io.emit("trends:update", { trendingHashtags });
+            console.log(
+                "Socket event trends:update emitted with new trending hashtags"
+            );
+        } catch (trendsError) {
+            console.error("Error calculating trending hashtags:", trendsError);
+        }
+        // -----------------------------------------
+
+        // --- Emit Socket.IO Event ---
+        try {
+            const io = getIoInstance();
+            // Emit to all connected clients initially
+            io.emit("tweet:new", { tweet: populatedTweet });
+            console.log(
+                `Socket event tweet:new emitted for tweet ${populatedTweet._id}`
+            );
+        } catch (socketError) {
+            // Log socket error but don't fail the HTTP request
+            console.error(
+                "Socket.IO emission error in createTweet:",
+                socketError
+            );
+        }
+        // ---------------------------
 
         res.status(201).json({
             status: "success",
             data: {
-                tweet,
+                tweet: populatedTweet, // Send the populated tweet
             },
         });
     } catch (error) {
-        res.status(400).json({
-            status: "error",
-            message: error.message,
-        });
+        // Pass error to the central error handler
+        next(error);
     }
 };
 

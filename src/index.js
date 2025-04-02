@@ -16,6 +16,9 @@ const uploadRoutes = require("./routes/upload.routes");
 const searchRoutes = require("./routes/search.routes");
 const trendsRoutes = require("./routes/trends.routes");
 
+// Import Socket.IO handler
+const { initializeSocketIO, setIoInstance } = require("./socketHandler");
+
 // Create Express app
 const app = express();
 const httpServer = createServer(app);
@@ -28,6 +31,9 @@ const io = new Server(httpServer, {
         credentials: true,
     },
 });
+
+// Make io instance available globally (or pass to handler)
+setIoInstance(io);
 
 // Middleware
 app.use(helmet());
@@ -57,14 +63,8 @@ app.use("/api/upload", uploadRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/trends", trendsRoutes);
 
-// Socket.io connection handling
-io.on("connection", (socket) => {
-    console.log("A user connected:", socket.id);
-
-    socket.on("disconnect", () => {
-        console.log("User disconnected:", socket.id);
-    });
-});
+// Initialize Socket.IO connection handling (moved to socketHandler.js)
+initializeSocketIO(io);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

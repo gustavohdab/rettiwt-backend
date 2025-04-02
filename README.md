@@ -42,6 +42,21 @@ A RESTful API for the Twitter Clone application built with Node.js, Express, Mon
     ```
 5. Fill in the required environment variables in the `.env` file. Ensure you provide a valid `MONGODB_URI` and strong, unique secrets for `JWT_SECRET` and `JWT_REFRESH_SECRET`. The `.env.example` file documents all required variables, including those for file uploads (`UPLOAD_DIR`, `MAX_FILE_SIZE`).
 
+### Environment Variables
+
+Create a `.env` file in the `backend` root directory based on `.env.example`. The following variables are required:
+
+-   `PORT`: The port the server will run on (e.g., `5000`).
+-   `NODE_ENV`: Environment mode (`development` or `production`). Set to `production` for deployments.
+-   `MONGODB_URI`: Your MongoDB connection string (e.g., `mongodb+srv://user:password@cluster.mongodb.net/database_name?retryWrites=true&w=majority`).
+-   `JWT_SECRET`: A strong, unique secret key for signing JWT access tokens.
+-   `JWT_EXPIRES_IN`: Expiration time for access tokens (e.g., `15m`, `1h`, `7d`).
+-   `JWT_REFRESH_SECRET`: A strong, unique secret key for signing JWT refresh tokens. Must be different from `JWT_SECRET`.
+-   `JWT_REFRESH_EXPIRES_IN`: Expiration time for refresh tokens (e.g., `30d`, `60d`).
+-   `FRONTEND_URL`: The URL of your frontend application for CORS configuration (e.g., `http://localhost:3000` or your deployed frontend URL).
+-   `UPLOAD_DIR`: Directory where uploaded files will be stored relative to the backend root (e.g., `uploads`). Ensure this directory exists and the server has write permissions.
+-   `MAX_FILE_SIZE`: Maximum allowed file size for uploads in bytes (e.g., `5242880` for 5MB).
+
 ### Running the Server
 
 Development mode (with hot-reloading):
@@ -114,8 +129,8 @@ _Note: For detailed request/response examples, refer to API testing tools or fro
 
 -   `GET /api/search?q={query}&type={type}&page={page}&limit={limit}`: Search for users, tweets, or hashtags.
     -   `q`: Search query (required).
-    -   `type`: Optional filter (`users`, `tweets`, `hashtags`).
-    -   `page`, `limit`: Optional pagination.
+    -   `type`: Optional filter (`users`, `tweets`, `hashtags`, `all`). If omitted or `all`, searches across all types.
+    -   `page`, `limit`: Optional pagination. Applies primarily when a specific `type` is requested. When `type=all`, a limited number of results (e.g., 5) per category are returned, and pagination reflects the total count across all types.
 
 ### Trends Endpoints
 
@@ -130,9 +145,16 @@ _Note: For detailed request/response examples, refer to API testing tools or fro
 
 ## Deployment
 
-This application uses a `Procfile` (`web: npm start`) for deployment on platforms like Heroku.
+This application uses a `Procfile` (`web: npm start`) which makes it suitable for deployment on platforms like Heroku, Render, or similar PaaS providers that support Node.js and Procfiles.
 
-Ensure all necessary environment variables (especially secrets and `NODE_ENV=production`) are set in your deployment environment.
+**General Steps:**
+
+1.  **Set Environment Variables:** Configure all required environment variables (listed above) in your deployment environment's settings panel. Crucially, set `NODE_ENV=production`. Ensure secrets (`JWT_SECRET`, `JWT_REFRESH_SECRET`) are strong and kept confidential.
+2.  **Database:** Ensure your deployed application can connect to your MongoDB instance (e.g., using MongoDB Atlas and whitelisting the deployment service's IP address if necessary).
+3.  **Build Step:** Depending on the platform, a build step might be required. Typically, `npm install --production` (or `npm ci`) is run to install dependencies.
+4.  **Start Command:** The platform will use the `Procfile` (or a configured start command) to run `npm start`.
+5.  **CORS:** Ensure the `FRONTEND_URL` environment variable is set to the correct URL of your deployed frontend application.
+6.  **File Uploads:** The `UPLOAD_DIR` needs to be writable by the server process. Some platforms might require specific configuration for persistent file storage, or you might consider using a cloud storage service (like AWS S3, Google Cloud Storage) instead of the local filesystem for production uploads.
 
 ## License
 
