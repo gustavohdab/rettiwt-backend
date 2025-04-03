@@ -1,5 +1,5 @@
 const jwt = require("jsonwebtoken");
-const User = require("./models/user.model"); // Assuming user model path
+const User = require("./models/user.model");
 
 // Placeholder for storing connected users if needed (consider alternatives like Redis for scalability)
 const connectedUsers = new Map(); // Map<userId, socketId>

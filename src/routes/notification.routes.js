@@ -1,5 +1,6 @@
 const express = require("express");
-const { protect } = require("../middleware/auth.middleware"); // Assuming auth middleware exists
+const { protect } = require("../middleware/auth.middleware");
+
 const {
     getNotifications,
     markNotificationRead,
