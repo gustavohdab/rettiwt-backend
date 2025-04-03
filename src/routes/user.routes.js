@@ -58,6 +58,17 @@ const updateProfileValidation = [
 ];
 
 /**
+ * @route GET /api/users/recommendations/paginated
+ * @desc Get paginated user recommendations for "Who to Follow" page
+ * @access Private
+ */
+router.get(
+    "/recommendations/paginated",
+    protect, // Requires user to be logged in
+    userController.getPaginatedRecommendedUsers
+);
+
+/**
  * @route GET /api/users/suggestions
  * @desc Get user suggestions for mentions based on query
  * @access Private

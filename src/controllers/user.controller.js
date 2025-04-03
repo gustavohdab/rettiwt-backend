@@ -460,6 +460,61 @@ const getUserSuggestions = async (req, res, next) => {
     }
 };
 
+/**
+ * Get paginated user recommendations ("Who to follow" page)
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ * @param {Function} next - Express next function
+ */
+const getPaginatedRecommendedUsers = async (req, res, next) => {
+    try {
+        const currentUserId = req.user._id;
+        const currentUserFollowing = req.user.following; // Assuming 'following' is populated or available on req.user
+
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10; // Default to 10 per page
+        const skip = (page - 1) * limit;
+
+        // Users to exclude: current user + users already followed
+        const excludeUserIds = [
+            currentUserId,
+            ...(currentUserFollowing?.map((id) => id.toString()) || []), // Ensure following IDs are strings
+        ];
+
+        // Define the query to find users not in the exclude list
+        const query = {
+            _id: { $nin: excludeUserIds },
+            isActive: true, // Optionally ensure users are active
+        };
+
+        // Get the paginated list of recommended users
+        const recommendedUsers = await User.find(query)
+            .sort({ followerCount: -1 }) // Recommend based on follower count
+            .skip(skip)
+            .limit(limit)
+            .select("username name avatar bio followerCount"); // Select fields for display
+
+        // Get the total count of potential recommendations for pagination
+        const total = await User.countDocuments(query);
+
+        res.status(200).json({
+            status: "success",
+            data: {
+                users: recommendedUsers,
+                pagination: {
+                    page,
+                    limit,
+                    total,
+                    pages: Math.ceil(total / limit),
+                },
+            },
+        });
+    } catch (error) {
+        // Pass error to the central error handler
+        next(error);
+    }
+};
+
 module.exports = {
     getUserProfile,
     updateUserProfile,
@@ -469,4 +524,5 @@ module.exports = {
     getUserFollowing,
     getUserBookmarks,
     getUserSuggestions,
+    getPaginatedRecommendedUsers,
 };
