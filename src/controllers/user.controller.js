@@ -1,5 +1,6 @@
 const User = require("../models/user.model");
 const Tweet = require("../models/tweet.model");
+const Notification = require("../models/notification.model");
 const { getIoInstance } = require("../socketHandler");
 
 /**
@@ -95,14 +96,15 @@ const followUser = async (req, res, next) => {
     try {
         const { username } = req.params;
         const currentUser = req.user; // Authenticated user
-        const userIdToFollow = (await User.findOne({ username }).select("_id"))
-            ?._id;
+        const userToFollow = await User.findOne({ username }); // Fetch full user to get ID
 
-        if (!userIdToFollow) {
+        if (!userToFollow) {
             const err = new Error("User to follow not found");
             err.statusCode = 404;
             throw err;
         }
+
+        const userIdToFollow = userToFollow._id;
 
         if (userIdToFollow.toString() === currentUser._id.toString()) {
             const err = new Error("You cannot follow yourself");
@@ -120,13 +122,49 @@ const followUser = async (req, res, next) => {
         await Promise.all([
             User.findByIdAndUpdate(currentUser._id, {
                 $addToSet: { following: userIdToFollow },
+                $inc: { followingCount: 1 }, // Increment following count
             }),
             User.findByIdAndUpdate(userIdToFollow, {
                 $addToSet: { followers: currentUser._id },
+                $inc: { followerCount: 1 }, // Increment follower count
             }),
         ]);
 
-        // --- Emit Socket.IO Event ---
+        // --- Create Notification ---
+        try {
+            const notification = new Notification({
+                recipient: userIdToFollow,
+                sender: currentUser._id,
+                type: "follow",
+            });
+            await notification.save();
+
+            // Populate sender for the socket event
+            const populatedNotification = await Notification.findById(
+                notification._id
+            )
+                .populate("sender", "username name avatar")
+                .lean();
+
+            // Emit event to the user being followed
+            const io = getIoInstance();
+            io.to(userIdToFollow.toString()).emit(
+                "notification:new",
+                populatedNotification
+            );
+            console.log(
+                `Socket event notification:new emitted to room ${userIdToFollow.toString()} for follow`
+            );
+        } catch (notificationError) {
+            console.error(
+                "Error creating/emitting follow notification:",
+                notificationError
+            );
+            // Don't fail the main request if notification fails
+        }
+        // --------------------------
+
+        // --- Emit Socket.IO Event for UI update ---
         try {
             const io = getIoInstance();
             const emitterUserId = currentUser._id.toString();
@@ -381,6 +419,47 @@ const getUserBookmarks = async (req, res) => {
     }
 };
 
+/**
+ * Get user suggestions for mentions
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const getUserSuggestions = async (req, res, next) => {
+    try {
+        const query = req.query.q || "";
+        const currentUserId = req.user._id; // Ensure user doesn't get suggested to themself
+
+        // Basic validation: require at least 1 character for suggestions
+        if (query.length < 1) {
+            return res
+                .status(200)
+                .json({ status: "success", data: { suggestions: [] } });
+        }
+
+        // Escape regex characters in the query to prevent injection
+        const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+        const regex = new RegExp("^" + escapedQuery, "i"); // Case-insensitive starts-with
+
+        const suggestions = await User.find({
+            _id: { $ne: currentUserId }, // Exclude the current user
+            $or: [{ username: regex }, { name: regex }],
+        })
+            .select("_id username name avatar") // Select only necessary fields
+            .limit(5); // Limit the number of suggestions
+
+        res.status(200).json({
+            status: "success",
+            data: {
+                suggestions: suggestions,
+            },
+        });
+    } catch (error) {
+        // Pass error to the central error handler
+        next(error);
+    }
+};
+
 module.exports = {
     getUserProfile,
     updateUserProfile,
@@ -389,4 +468,5 @@ module.exports = {
     getUserFollowers,
     getUserFollowing,
     getUserBookmarks,
+    getUserSuggestions,
 };

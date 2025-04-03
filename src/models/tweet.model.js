@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const User = require("./user.model"); // Ensure User model is imported for validation
 
 const tweetSchema = new mongoose.Schema(
     {
@@ -95,7 +96,7 @@ const tweetSchema = new mongoose.Schema(
                 trim: true,
             },
         ],
-        // Mentions extracted from content
+        // Mentions extracted from content (stores validated User IDs)
         mentions: [
             {
                 type: mongoose.Schema.Types.ObjectId,
@@ -130,20 +131,46 @@ tweetSchema.virtual("quotes", {
 });
 
 // Pre-save middleware to extract hashtags and mentions
-tweetSchema.pre("save", function (next) {
+tweetSchema.pre("save", async function (next) {
+    // Make async for User query
     if (this.isModified("content")) {
-        // Extract hashtags using Unicode-aware regex
-        // Allows letters (including Unicode), numbers, and underscore
+        // --- Extract Hashtags ---
         const hashtagRegex = /#([\p{L}\p{N}_]+)/gu;
         this.hashtags = [];
-        let match;
-        while ((match = hashtagRegex.exec(this.content)) !== null) {
-            // Store the extracted hashtag (group 1) in lowercase
-            this.hashtags.push(match[1].toLowerCase());
+        let hashMatch;
+        while ((hashMatch = hashtagRegex.exec(this.content)) !== null) {
+            this.hashtags.push(hashMatch[1].toLowerCase());
         }
 
-        // Mentions would need to be processed separately
-        // after verifying the users exist
+        // --- Extract and Validate Mentions ---
+        const mentionRegex = /@([a-zA-Z0-9_]+)/g; // Basic mention regex
+        const potentialUsernames = [];
+        let mentionMatch;
+        while ((mentionMatch = mentionRegex.exec(this.content)) !== null) {
+            // Avoid duplicates and self-mentions implicitly later
+            potentialUsernames.push(mentionMatch[1]);
+        }
+
+        this.mentions = []; // Reset mentions array
+        if (potentialUsernames.length > 0) {
+            try {
+                // Find users matching the potential usernames (case-insensitive)
+                const foundUsers = await User.find({
+                    username: {
+                        $in: potentialUsernames.map(
+                            (name) => new RegExp(`^${name}$`, "i")
+                        ),
+                    },
+                }).select("_id"); // Only select IDs
+
+                this.mentions = foundUsers.map((user) => user._id);
+            } catch (error) {
+                console.error("Error validating mentions:", error);
+                // Decide if failure here should block saving? For now, just log error.
+                // Potentially call next(error) to stop save.
+            }
+        }
+        // --------------------------------------
     }
     next();
 });

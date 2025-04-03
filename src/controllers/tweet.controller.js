@@ -1,5 +1,6 @@
 const Tweet = require("../models/tweet.model");
 const User = require("../models/user.model");
+const Notification = require("../models/notification.model"); // Import Notification model
 const { getIoInstance } = require("../socketHandler"); // Import Socket.IO instance getter
 
 /**
@@ -11,41 +12,207 @@ const { getIoInstance } = require("../socketHandler"); // Import Socket.IO insta
 const createTweet = async (req, res, next) => {
     try {
         const { content, media = [], quotedTweetId, inReplyToId } = req.body;
+        const currentUser = req.user;
 
-        // Create the tweet
-        const tweet = new Tweet({
+        // Create the tweet object
+        let tweet = new Tweet({
             content,
-            author: req.user._id,
+            author: currentUser._id,
             media,
             quotedTweet: quotedTweetId || null,
             inReplyTo: inReplyToId || null,
+            // Mentions will be populated by the pre-save hook
         });
 
+        // Save the tweet (pre-save hook runs here)
         await tweet.save();
 
-        // --- Update engagement counts ---
+        // Re-fetch the tweet to ensure we have the populated mentions array
+        // (Alternatively, the hook could potentially attach validated users to `this`)
+        tweet = await Tweet.findById(tweet._id).lean();
+        if (!tweet) {
+            throw new Error("Failed to re-fetch tweet after save.");
+        } // Basic check
+
+        // --- Update Engagement Counts & Create Reply/Quote Notifications ---
         const updatePromises = [];
+        let parentTweetAuthorId = null;
+        let quotedTweetAuthorId = null; // Added for quote notification
+        let quotedTweetContent = null; // Added for quote notification snippet
+
+        // Handle Reply
         if (inReplyToId) {
-            updatePromises.push(
-                Tweet.findByIdAndUpdate(inReplyToId, {
-                    $inc: { "engagementCount.replies": 1 },
-                })
+            const parentTweet = await Tweet.findByIdAndUpdate(
+                inReplyToId,
+                { $inc: { "engagementCount.replies": 1 } },
+                { new: false, projection: { author: 1, content: 1 } } // Get author & content
             );
+            if (parentTweet) {
+                parentTweetAuthorId = parentTweet.author;
+                // Use parent tweet content for reply notification snippet
+                quotedTweetContent = parentTweet.content;
+            }
+            updatePromises.push(parentTweet); // Add promise
         }
+        // Create Reply Notification (if applicable and not replying to self)
+        if (
+            parentTweetAuthorId &&
+            parentTweetAuthorId.toString() !== currentUser._id.toString()
+        ) {
+            try {
+                const snippet =
+                    quotedTweetContent?.substring(0, 100) +
+                    (quotedTweetContent?.length > 100 ? "..." : "");
+                const notification = new Notification({
+                    recipient: parentTweetAuthorId,
+                    sender: currentUser._id,
+                    type: "reply",
+                    tweet: tweet._id,
+                    tweetSnippet: snippet,
+                });
+                await notification.save();
+                const populatedNotification = await Notification.findById(
+                    notification._id
+                )
+                    .populate("sender", "username name avatar")
+                    .lean();
+                const io = getIoInstance();
+                io.to(parentTweetAuthorId.toString()).emit(
+                    "notification:new",
+                    populatedNotification
+                );
+                console.log(
+                    `Socket event notification:new emitted to room ${parentTweetAuthorId.toString()} for reply`
+                );
+            } catch (notificationError) {
+                console.error(
+                    "Error creating/emitting reply notification:",
+                    notificationError
+                );
+            }
+        }
+
+        // Handle Quote Tweet
         if (quotedTweetId) {
-            updatePromises.push(
-                Tweet.findByIdAndUpdate(quotedTweetId, {
+            const quotedTweet = await Tweet.findByIdAndUpdate(
+                quotedTweetId,
+                {
                     $inc: { "engagementCount.quotes": 1 },
-                })
-            );
+                },
+                { new: false, projection: { author: 1, content: 1 } }
+            ); // Get author & content
+
+            if (quotedTweet) {
+                quotedTweetAuthorId = quotedTweet.author;
+                // Use the QUOTED tweet's content for the quote notification snippet
+                quotedTweetContent = quotedTweet.content;
+            }
+            updatePromises.push(quotedTweet); // Add promise
+
+            // Create Quote Notification (if applicable and not quoting self)
+            if (
+                quotedTweetAuthorId &&
+                quotedTweetAuthorId.toString() !== currentUser._id.toString()
+            ) {
+                try {
+                    const snippet =
+                        quotedTweetContent?.substring(0, 100) +
+                        (quotedTweetContent?.length > 100 ? "..." : "");
+                    const notification = new Notification({
+                        recipient: quotedTweetAuthorId,
+                        sender: currentUser._id,
+                        type: "quote",
+                        tweet: tweet._id, // The new tweet that *contains* the quote
+                        tweetSnippet: snippet, // Snippet of the *original* tweet being quoted
+                    });
+                    await notification.save();
+                    const populatedNotification = await Notification.findById(
+                        notification._id
+                    )
+                        .populate("sender", "username name avatar")
+                        .lean();
+                    const io = getIoInstance();
+                    io.to(quotedTweetAuthorId.toString()).emit(
+                        "notification:new",
+                        populatedNotification
+                    );
+                    console.log(
+                        `Socket event notification:new emitted to room ${quotedTweetAuthorId.toString()} for quote`
+                    );
+                } catch (notificationError) {
+                    console.error(
+                        "Error creating/emitting quote notification:",
+                        notificationError
+                    );
+                }
+            }
         }
+
         if (updatePromises.length > 0) {
-            await Promise.all(updatePromises);
+            await Promise.all(updatePromises.filter((p) => p));
         }
-        // -------------------------------
+        // ----------------------------------------------------------
+
+        // --- Create Mention Notifications ---
+        if (tweet.mentions && tweet.mentions.length > 0) {
+            // Use Promise.allSettled to handle multiple notification creations concurrently
+            // and avoid stopping if one fails.
+            const mentionNotificationPromises = tweet.mentions.map(
+                async (mentionedUserId) => {
+                    // Don't notify self
+                    if (
+                        mentionedUserId.toString() ===
+                        currentUser._id.toString()
+                    ) {
+                        return { status: "skipped", reason: "self-mention" };
+                    }
+
+                    try {
+                        const snippet =
+                            tweet.content?.substring(0, 100) +
+                            (tweet.content?.length > 100 ? "..." : "");
+                        const notification = new Notification({
+                            recipient: mentionedUserId,
+                            sender: currentUser._id,
+                            type: "mention",
+                            tweet: tweet._id,
+                            tweetSnippet: snippet,
+                        });
+                        await notification.save();
+
+                        // Populate and emit
+                        const populatedNotification =
+                            await Notification.findById(notification._id)
+                                .populate("sender", "username name avatar")
+                                .lean();
+                        const io = getIoInstance();
+                        io.to(mentionedUserId.toString()).emit(
+                            "notification:new",
+                            populatedNotification
+                        );
+                        console.log(
+                            `Socket event notification:new emitted to room ${mentionedUserId.toString()} for mention`
+                        );
+                        return { status: "fulfilled", value: mentionedUserId };
+                    } catch (notificationError) {
+                        console.error(
+                            `Error creating/emitting mention notification for ${mentionedUserId}:`,
+                            notificationError
+                        );
+                        return {
+                            status: "rejected",
+                            reason: notificationError,
+                        };
+                    }
+                }
+            );
+            // Wait for all mention notifications to settle (optional)
+            await Promise.allSettled(mentionNotificationPromises);
+        }
+        // ----------------------------------
 
         // Populate author information for the response and socket event
-        const populatedTweet = await Tweet.findById(tweet._id)
+        const populatedTweetForResponse = await Tweet.findById(tweet._id) // Use the refetched lean tweet ID
             .populate("author", "username name avatar")
             .lean();
 
@@ -114,9 +281,9 @@ const createTweet = async (req, res, next) => {
         try {
             const io = getIoInstance();
             // Emit to all connected clients initially
-            io.emit("tweet:new", { tweet: populatedTweet });
+            io.emit("tweet:new", { tweet: populatedTweetForResponse });
             console.log(
-                `Socket event tweet:new emitted for tweet ${populatedTweet._id}`
+                `Socket event tweet:new emitted for tweet ${populatedTweetForResponse._id}`
             );
         } catch (socketError) {
             // Log socket error but don't fail the HTTP request
@@ -130,7 +297,7 @@ const createTweet = async (req, res, next) => {
         res.status(201).json({
             status: "success",
             data: {
-                tweet: populatedTweet, // Send the populated tweet
+                tweet: populatedTweetForResponse, // Send the populated tweet
             },
         });
     } catch (error) {
@@ -373,42 +540,86 @@ const deleteTweet = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-const likeTweet = async (req, res) => {
+const likeTweet = async (req, res, next) => {
     try {
-        const { id } = req.params;
+        const { id } = req.params; // Tweet ID
+        const currentUser = req.user; // Authenticated user
 
         const tweet = await Tweet.findById(id);
 
         if (!tweet || tweet.isDeleted) {
-            return res.status(404).json({
-                status: "error",
-                message: "Tweet not found",
-            });
+            const err = new Error("Tweet not found");
+            err.statusCode = 404;
+            throw err;
         }
 
         // Check if user has already liked
-        if (tweet.likes.includes(req.user._id)) {
-            return res.status(400).json({
-                status: "error",
-                message: "You have already liked this tweet",
-            });
+        if (tweet.likes.includes(currentUser._id)) {
+            const err = new Error("You have already liked this tweet");
+            err.statusCode = 400;
+            throw err;
         }
 
         // Add user to likes array and increment count
-        await Tweet.findByIdAndUpdate(id, {
-            $push: { likes: req.user._id },
-            $inc: { "engagementCount.likes": 1 },
-        });
+        // Use findByIdAndUpdate and retrieve the updated document to get the author ID
+        const updatedTweet = await Tweet.findByIdAndUpdate(
+            id,
+            {
+                $addToSet: { likes: currentUser._id }, // Use $addToSet to be safe
+                $inc: { "engagementCount.likes": 1 },
+            },
+            { new: true } // Return the updated document
+        ).lean(); // Use lean() here to get plain object for snippet
+
+        // --- Create Notification (only if not liking own tweet) ---
+        if (updatedTweet.author.toString() !== currentUser._id.toString()) {
+            try {
+                // Create snippet from the liked tweet's content
+                const snippet =
+                    updatedTweet.content?.substring(0, 100) +
+                    (updatedTweet.content?.length > 100 ? "..." : "");
+
+                const notification = new Notification({
+                    recipient: updatedTweet.author,
+                    sender: currentUser._id,
+                    type: "like",
+                    tweet: updatedTweet._id,
+                    tweetSnippet: snippet, // Add the snippet
+                });
+                await notification.save();
+
+                // Populate sender for the socket event
+                const populatedNotification = await Notification.findById(
+                    notification._id
+                )
+                    .populate("sender", "username name avatar")
+                    .lean();
+
+                // Emit event to the tweet author
+                const io = getIoInstance();
+                io.to(updatedTweet.author.toString()).emit(
+                    "notification:new",
+                    populatedNotification
+                );
+                console.log(
+                    `Socket event notification:new emitted to room ${updatedTweet.author.toString()} for like`
+                );
+            } catch (notificationError) {
+                console.error(
+                    "Error creating/emitting like notification:",
+                    notificationError
+                );
+                // Don't fail the main request if notification fails
+            }
+        }
+        // -----------------------------------------------------------
 
         res.status(200).json({
             status: "success",
             message: "Tweet liked successfully",
         });
     } catch (error) {
-        res.status(400).json({
-            status: "error",
-            message: error.message,
-        });
+        next(error); // Pass error to central handler
     }
 };
 
@@ -461,42 +672,75 @@ const unlikeTweet = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-const retweetTweet = async (req, res) => {
+const retweetTweet = async (req, res, next) => {
     try {
         const { id } = req.params;
+        const currentUser = req.user;
 
         const tweet = await Tweet.findById(id);
 
         if (!tweet || tweet.isDeleted) {
-            return res.status(404).json({
-                status: "error",
-                message: "Tweet not found",
-            });
+            const err = new Error("Tweet not found");
+            err.statusCode = 404;
+            throw err;
         }
 
-        // Check if user has already retweeted
-        if (tweet.retweets.includes(req.user._id)) {
-            return res.status(400).json({
-                status: "error",
-                message: "You have already retweeted this tweet",
-            });
+        if (tweet.retweets.includes(currentUser._id)) {
+            const err = new Error("You have already retweeted this tweet");
+            err.statusCode = 400;
+            throw err;
         }
 
-        // Add user to retweets array and increment count
-        await Tweet.findByIdAndUpdate(id, {
-            $push: { retweets: req.user._id },
-            $inc: { "engagementCount.retweets": 1 },
-        });
+        const updatedTweet = await Tweet.findByIdAndUpdate(
+            id,
+            {
+                $addToSet: { retweets: currentUser._id },
+                $inc: { "engagementCount.retweets": 1 },
+            },
+            { new: true }
+        ).lean();
+
+        if (updatedTweet.author.toString() !== currentUser._id.toString()) {
+            try {
+                const snippet =
+                    updatedTweet.content?.substring(0, 100) +
+                    (updatedTweet.content?.length > 100 ? "..." : "");
+                const notification = new Notification({
+                    recipient: updatedTweet.author,
+                    sender: currentUser._id,
+                    type: "retweet",
+                    tweet: updatedTweet._id,
+                    tweetSnippet: snippet,
+                });
+                await notification.save();
+
+                const populatedNotification = await Notification.findById(
+                    notification._id
+                )
+                    .populate("sender", "username name avatar")
+                    .lean();
+                const io = getIoInstance();
+                io.to(updatedTweet.author.toString()).emit(
+                    "notification:new",
+                    populatedNotification
+                );
+                console.log(
+                    `Socket event notification:new emitted to room ${updatedTweet.author.toString()} for retweet`
+                );
+            } catch (notificationError) {
+                console.error(
+                    "Error creating/emitting retweet notification:",
+                    notificationError
+                );
+            }
+        }
 
         res.status(200).json({
             status: "success",
             message: "Tweet retweeted successfully",
         });
     } catch (error) {
-        res.status(400).json({
-            status: "error",
-            message: error.message,
-        });
+        next(error);
     }
 };
 

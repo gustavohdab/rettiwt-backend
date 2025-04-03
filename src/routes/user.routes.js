@@ -58,6 +58,13 @@ const updateProfileValidation = [
 ];
 
 /**
+ * @route GET /api/users/suggestions
+ * @desc Get user suggestions for mentions based on query
+ * @access Private
+ */
+router.get("/suggestions", protect, userController.getUserSuggestions);
+
+/**
  * @route GET /api/users/bookmarks
  * @desc Get current user's bookmarked tweets
  * @access Private

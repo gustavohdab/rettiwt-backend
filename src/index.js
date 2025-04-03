@@ -15,6 +15,7 @@ const tweetRoutes = require("./routes/tweet.routes");
 const uploadRoutes = require("./routes/upload.routes");
 const searchRoutes = require("./routes/search.routes");
 const trendsRoutes = require("./routes/trends.routes");
+const notificationRoutes = require("./routes/notification.routes");
 
 // Import Socket.IO handler
 const { initializeSocketIO, setIoInstance } = require("./socketHandler");
@@ -62,6 +63,7 @@ app.use("/api/tweets", tweetRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/trends", trendsRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 // Initialize Socket.IO connection handling (moved to socketHandler.js)
 initializeSocketIO(io);
